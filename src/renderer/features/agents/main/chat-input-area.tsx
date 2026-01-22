@@ -20,6 +20,7 @@ import {
   CheckIcon,
   ClaudeCodeIcon,
   PlanIcon,
+  ThinkingIcon,
 } from "../../../components/ui/icons"
 import { Kbd } from "../../../components/ui/kbd"
 import {
@@ -573,8 +574,12 @@ export const ChatInputArea = memo(function ChatInputArea({
         return
       }
 
-      // Handle repository commands - auto-send to agent
-      if (command.prompt) {
+      // Handle custom commands
+      if (command.argumentHint) {
+        // Command expects arguments - insert command and let user add args
+        editorRef.current?.setValue(`/${command.name} `)
+      } else if (command.prompt) {
+        // Command without arguments - send immediately
         editorRef.current?.setValue(command.prompt)
         setTimeout(() => onSend(), 0)
       }
@@ -980,10 +985,13 @@ export const ChatInputArea = memo(function ChatInputArea({
                       })}
                       <DropdownMenuSeparator />
                       <div
-                        className="flex items-center justify-between px-2 py-1.5"
+                        className="flex items-center justify-between px-1.5 py-1.5 mx-1"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <span className="text-sm">Thinking</span>
+                        <div className="flex items-center gap-1.5">
+                          <ThinkingIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          <span className="text-sm">Thinking</span>
+                        </div>
                         <Switch
                           checked={thinkingEnabled}
                           onCheckedChange={setThinkingEnabled}
@@ -1120,8 +1128,7 @@ export const ChatInputArea = memo(function ChatInputArea({
         onSelect={handleSlashSelect}
         searchText={slashSearchText}
         position={slashPosition}
-        teamId={teamId}
-        repository={repository}
+        projectPath={projectPath}
         isPlanMode={isPlanMode}
       />
     </div>

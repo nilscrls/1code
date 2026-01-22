@@ -60,6 +60,7 @@ import { trpc } from "../../../lib/trpc"
 import {
   AgentsSlashCommand,
   COMMAND_PROMPTS,
+  BUILTIN_SLASH_COMMANDS,
   type SlashCommandOption,
 } from "../commands"
 import { useAgentsFileUpload } from "../hooks/use-agents-file-upload"
@@ -694,12 +695,45 @@ export function NewChatForm({
     }
   }
 
-  const handleSend = useCallback(() => {
+  const trpcUtils = trpc.useUtils()
+
+  const handleSend = useCallback(async () => {
     // Get value from uncontrolled editor
-    const message = editorRef.current?.getValue() || ""
+    let message = editorRef.current?.getValue() || ""
 
     if (!message.trim() || !selectedProject) {
       return
+    }
+
+    // Check if message is a slash command with arguments (e.g. "/hello world")
+    const slashMatch = message.match(/^\/(\S+)\s*(.*)$/)
+    if (slashMatch) {
+      const [, commandName, args] = slashMatch
+
+      // Check if it's a builtin command - if so, don't process as custom command
+      const builtinNames = new Set(
+        BUILTIN_SLASH_COMMANDS.map((cmd) => cmd.name),
+      )
+      if (!builtinNames.has(commandName)) {
+        // This is a custom command - load content and replace $ARGUMENTS
+        try {
+          const commands = await trpcUtils.commands.list.fetch({
+            projectPath: validatedProject?.path,
+          })
+          const cmd = commands.find((c) => c.name === commandName)
+
+          if (cmd) {
+            const { content } = await trpcUtils.commands.getContent.fetch({
+              path: cmd.path,
+            })
+            // Replace $ARGUMENTS with the provided args
+            message = content.replace(/\$ARGUMENTS/g, args.trim())
+          }
+        } catch (error) {
+          console.error("Failed to process custom command:", error)
+          // Fall through with original message
+        }
+      }
     }
 
     // Build message parts array (images first, then text)
@@ -744,12 +778,14 @@ export function NewChatForm({
     // Editor and images are cleared in onSuccess callback
   }, [
     selectedProject,
+    validatedProject?.path,
     createChatMutation,
     hasContent,
     selectedBranch,
     workMode,
     images,
     isPlanMode,
+    trpcUtils,
   ])
 
   const handleMentionSelect = useCallback((mention: FileMentionOption) => {
@@ -915,8 +951,12 @@ export function NewChatForm({
         return
       }
 
-      // Handle repository commands - auto-send to agent
-      if (command.prompt) {
+      // Handle custom commands
+      if (command.argumentHint) {
+        // Command expects arguments - insert command and let user add args
+        editorRef.current?.setValue(`/${command.name} `)
+      } else if (command.prompt) {
+        // Command without arguments - send immediately
         editorRef.current?.setValue(command.prompt)
         setTimeout(() => handleSend(), 0)
       }
@@ -1625,8 +1665,7 @@ export function NewChatForm({
                   onSelect={handleSlashSelect}
                   searchText={slashSearchText}
                   position={slashPosition}
-                  teamId={selectedTeamId || undefined}
-                  repository={resolvedRepo?.full_name}
+                  projectPath={validatedProject?.path}
                   isPlanMode={isPlanMode}
                   disabledCommands={["clear"]}
                 />

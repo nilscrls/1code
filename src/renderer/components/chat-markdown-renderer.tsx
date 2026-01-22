@@ -2,6 +2,7 @@ import { cn } from "../lib/utils"
 import { memo, useState, useCallback, useEffect, useMemo } from "react"
 import { Streamdown, parseMarkdownIntoBlocks } from "streamdown"
 import remarkBreaks from "remark-breaks"
+import remarkGfm from "remark-gfm"
 import { Copy, Check } from "lucide-react"
 import { useCodeTheme } from "../lib/hooks/use-code-theme"
 import { highlightCode } from "../lib/themes/shiki-theme-loader"
@@ -436,7 +437,7 @@ export const ChatMarkdownRenderer = memo(function ChatMarkdownRenderer({
       <Streamdown
         mode="streaming"
         components={components}
-        remarkPlugins={[remarkBreaks]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         isAnimating={isStreaming}
         parseIncompleteMarkdown={isStreaming}
         controls={false}
@@ -675,7 +676,7 @@ const MemoizedMarkdownBlock = memo(
       <Streamdown
         mode="static"
         components={components}
-        remarkPlugins={[remarkBreaks]}
+        remarkPlugins={[remarkGfm, remarkBreaks]}
         controls={false}
       >
         {content}

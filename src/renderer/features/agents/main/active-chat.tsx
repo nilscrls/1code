@@ -54,6 +54,7 @@ import {
   useRef,
   useState
 } from "react"
+import { flushSync } from "react-dom"
 import { toast } from "sonner"
 import type { FileStatus } from "../../../../shared/changes-types"
 import { getQueryClient } from "../../../contexts/TRPCProvider"
@@ -930,6 +931,8 @@ interface DiffStateContextValue {
   handleCommitSuccess: () => void
   handleCloseDiff: () => void
   handleViewedCountChange: (count: number) => void
+  /** Ref to register a function that resets activeTab to "changes" before closing */
+  resetActiveTabRef: React.MutableRefObject<(() => void) | null>
 }
 
 const DiffStateContext = createContext<DiffStateContextValue | null>(null)
@@ -1041,6 +1044,7 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
     handleSelectNextFile,
     handleCommitSuccess,
     handleViewedCountChange,
+    resetActiveTabRef,
   } = useDiffState()
 
   // Compute initial selected file synchronously for first render
@@ -1062,6 +1066,15 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
 
   // Active tab state (Changes/History)
   const [activeTab, setActiveTab] = useState<"changes" | "history">("changes")
+
+  // Register the reset function so handleCloseDiff can reset to "changes" tab before closing
+  // This prevents React 19 ref cleanup issues with HistoryView's ContextMenu components
+  useEffect(() => {
+    resetActiveTabRef.current = () => setActiveTab("changes")
+    return () => {
+      resetActiveTabRef.current = null
+    }
+  }, [resetActiveTabRef])
 
   // Selected commit for History tab
   const [selectedCommit, setSelectedCommit] = useAtom(selectedCommitAtom)
@@ -1442,6 +1455,10 @@ const DiffStateProvider = memo(function DiffStateProvider({
   // Viewed count state - kept here to avoid re-rendering ChatView
   const [viewedCount, setViewedCount] = useState(0)
 
+  // Ref for resetting activeTab to "changes" before closing
+  // This prevents React 19 ref cleanup issues with HistoryView's ContextMenu components
+  const resetActiveTabRef = useRef<(() => void) | null>(null)
+
   // All diff-related atoms are read HERE, not in ChatView
   const [selectedFilePath, setSelectedFilePath] = useAtom(selectedDiffFilePathAtom)
   const [, setFilteredDiffFiles] = useAtom(filteredDiffFilesAtom)
@@ -1509,6 +1526,12 @@ const DiffStateProvider = memo(function DiffStateProvider({
   }, [setSelectedFilePath, setFilteredDiffFiles, setParsedFileDiffs, setDiffContent, setPrefetchedFileContents, setDiffStats, fetchDiffStats])
 
   const handleCloseDiff = useCallback(() => {
+    // Use flushSync to reset activeTab synchronously before closing.
+    // This unmounts HistoryView's ContextMenu components in a single commit,
+    // preventing React 19 ref cleanup "Maximum update depth exceeded" error.
+    flushSync(() => {
+      resetActiveTabRef.current?.()
+    })
     setIsDiffSidebarOpen(false)
     setFilteredSubChatId(null)
   }, [setIsDiffSidebarOpen, setFilteredSubChatId])
@@ -1526,6 +1549,7 @@ const DiffStateProvider = memo(function DiffStateProvider({
     handleCommitSuccess,
     handleCloseDiff,
     handleViewedCountChange,
+    resetActiveTabRef,
   }), [selectedFilePath, filteredSubChatId, viewedCount, handleDiffFileSelect, handleSelectNextFile, handleCommitSuccess, handleCloseDiff, handleViewedCountChange])
 
   return (
@@ -2368,9 +2392,11 @@ const ChatViewInner = memo(function ChatViewInner({
   }, [pendingConflictMessage, isStreaming, sendMessage, setPendingConflictMessage])
 
   // Pending user questions from AskUserQuestion tool
-  const [pendingQuestions, setPendingQuestions] = useAtom(
+  const [pendingQuestionsMap, setPendingQuestionsMap] = useAtom(
     pendingUserQuestionsAtom,
   )
+  // Get pending questions for this specific subChat
+  const pendingQuestions = pendingQuestionsMap.get(subChatId) ?? null
 
   // Track whether chat input has content (for custom text with questions)
   const [inputHasContent, setInputHasContent] = useState(false)
@@ -2419,12 +2445,14 @@ const ChatViewInner = memo(function ChatViewInner({
 
       // Streaming just stopped - if there's a pending question for this chat,
       // clear it after a brief delay (backend already handled the abort)
-      if (pendingQuestions?.subChatId === subChatId) {
+      if (pendingQuestions) {
         const timeout = setTimeout(() => {
           // Re-check if still showing the same question (might have been cleared by other means)
-          setPendingQuestions((current) => {
-            if (current?.subChatId === subChatId) {
-              return null
+          setPendingQuestionsMap((current) => {
+            if (current.has(subChatId)) {
+              const newMap = new Map(current)
+              newMap.delete(subChatId)
+              return newMap
             }
             return current
           })
@@ -2436,7 +2464,7 @@ const ChatViewInner = memo(function ChatViewInner({
       }
       return () => clearTimeout(flagTimeout)
     }
-  }, [isStreaming, subChatId, pendingQuestions?.subChatId, pendingQuestions?.toolUseId, setPendingQuestions])
+  }, [isStreaming, subChatId, pendingQuestions, setPendingQuestionsMap])
 
   // Sync pending questions with messages state
   // This handles: 1) restoring on chat switch, 2) clearing when question is answered/timed out
@@ -2452,11 +2480,23 @@ const ChatViewInner = memo(function ChatViewInner({
     ) as any | undefined
 
 
+    // Helper to clear pending question for this subChat
+    const clearPendingQuestion = () => {
+      setPendingQuestionsMap((current) => {
+        if (current.has(subChatId)) {
+          const newMap = new Map(current)
+          newMap.delete(subChatId)
+          return newMap
+        }
+        return current
+      })
+    }
+
     // If streaming and we already have a pending question for this chat, keep it
     // (transport will manage it via chunks)
-    if (isStreaming && pendingQuestions?.subChatId === subChatId) {
+    if (isStreaming && pendingQuestions) {
       // But if the question in messages is already answered, clear the atom
-      if (pendingQuestions && !pendingQuestionPart) {
+      if (!pendingQuestionPart) {
         // Check if the specific toolUseId is now answered
         const answeredPart = lastAssistantMessage?.parts?.find(
           (part: any) =>
@@ -2467,7 +2507,7 @@ const ChatViewInner = memo(function ChatViewInner({
               part.state === "result"),
         )
         if (answeredPart) {
-          setPendingQuestions(null)
+          clearPendingQuestion()
         }
       }
       return
@@ -2482,16 +2522,28 @@ const ChatViewInner = memo(function ChatViewInner({
     // the backend is waiting for user response.
     if (pendingQuestionPart) {
       // Don't restore - if there's an existing pending question for this chat, clear it
-      if (pendingQuestions?.subChatId === subChatId) {
-        setPendingQuestions(null)
+      if (pendingQuestions) {
+        clearPendingQuestion()
       }
     } else {
       // No pending question - clear if belongs to this sub-chat
-      if (pendingQuestions?.subChatId === subChatId) {
-        setPendingQuestions(null)
+      if (pendingQuestions) {
+        clearPendingQuestion()
       }
     }
-  }, [subChatId, lastAssistantMessage, isStreaming, pendingQuestions, setPendingQuestions])
+  }, [subChatId, lastAssistantMessage, isStreaming, pendingQuestions, setPendingQuestionsMap])
+
+  // Helper to clear pending question for this subChat (used in callbacks)
+  const clearPendingQuestionCallback = useCallback(() => {
+    setPendingQuestionsMap((current) => {
+      if (current.has(subChatId)) {
+        const newMap = new Map(current)
+        newMap.delete(subChatId)
+        return newMap
+      }
+      return current
+    })
+  }, [subChatId, setPendingQuestionsMap])
 
   // Handle answering questions
   const handleQuestionsAnswer = useCallback(
@@ -2502,9 +2554,9 @@ const ChatViewInner = memo(function ChatViewInner({
         approved: true,
         updatedInput: { questions: pendingQuestions.questions, answers },
       })
-      setPendingQuestions(null)
+      clearPendingQuestionCallback()
     },
-    [pendingQuestions, setPendingQuestions],
+    [pendingQuestions, clearPendingQuestionCallback],
   )
 
   // Handle skipping questions
@@ -2514,7 +2566,7 @@ const ChatViewInner = memo(function ChatViewInner({
 
     // Clear UI immediately - don't wait for backend
     // This ensures dialog closes even if stream was already aborted
-    setPendingQuestions(null)
+    clearPendingQuestionCallback()
 
     // Try to notify backend (may fail if already aborted - that's ok)
     try {
@@ -2526,7 +2578,7 @@ const ChatViewInner = memo(function ChatViewInner({
     } catch {
       // Stream likely already aborted - ignore
     }
-  }, [pendingQuestions, setPendingQuestions])
+  }, [pendingQuestions, clearPendingQuestionCallback])
 
   // Ref to prevent double submit of question answer
   const isSubmittingQuestionAnswerRef = useRef(false)
@@ -2572,7 +2624,7 @@ const ChatViewInner = memo(function ChatViewInner({
             answers: formattedAnswers,
           },
         })
-        setPendingQuestions(null)
+        clearPendingQuestionCallback()
 
         // 5. Stop stream if currently streaming
         if (isStreamingRef.current) {
@@ -2597,17 +2649,17 @@ const ChatViewInner = memo(function ChatViewInner({
         isSubmittingQuestionAnswerRef.current = false
       }
     },
-    [pendingQuestions, setPendingQuestions, subChatId, parentChatId],
+    [pendingQuestions, clearPendingQuestionCallback, subChatId, parentChatId],
   )
 
   // Memoize the callback to prevent ChatInputArea re-renders
   // Only provide callback when there's a pending question for this subChat
   const submitWithQuestionAnswerCallback = useMemo(
     () =>
-      pendingQuestions?.subChatId === subChatId
+      pendingQuestions
         ? handleSubmitWithQuestionAnswer
         : undefined,
-    [pendingQuestions?.subChatId, subChatId, handleSubmitWithQuestionAnswer],
+    [pendingQuestions, handleSubmitWithQuestionAnswer],
   )
 
   // Watch for pending auth retry message (after successful OAuth flow)
@@ -2859,7 +2911,7 @@ const ChatViewInner = memo(function ChatViewInner({
 
         if (!isInsideOverlay && !hasOpenDialog) {
           // If there are pending questions for this chat, skip them instead of stopping stream
-          if (pendingQuestions?.subChatId === subChatId) {
+          if (pendingQuestions) {
             shouldSkipQuestions = true
           } else {
             shouldStop = true
@@ -3267,6 +3319,13 @@ const ChatViewInner = memo(function ChatViewInner({
     const item = popItemFromQueue(subChatId, itemId)
     if (!item) return
 
+    // Stop current stream if streaming
+    if (isStreamingRef.current) {
+      await handleStop()
+      // Small delay to ensure stop completes
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
     // Build message parts from queued item
     const parts: any[] = [
       ...(item.images || []).map((img) => ({
@@ -3330,7 +3389,7 @@ const ChatViewInner = memo(function ChatViewInner({
     scrollToBottom()
 
     await sendMessageRef.current({ role: "user", parts })
-  }, [subChatId, popItemFromQueue])
+  }, [subChatId, popItemFromQueue, handleStop])
 
   const handleRemoveFromQueue = useCallback((itemId: string) => {
     removeFromQueue(subChatId, itemId)
@@ -3721,7 +3780,7 @@ const ChatViewInner = memo(function ChatViewInner({
 
       {/* User questions panel - shows when AskUserQuestion tool is called */}
       {/* Only show if the pending question belongs to THIS sub-chat */}
-      {pendingQuestions && pendingQuestions.subChatId === subChatId && (
+      {pendingQuestions && (
         <div className="px-4 relative z-20">
           <div className="w-full px-2 max-w-2xl mx-auto">
             <AgentUserQuestion
@@ -3736,7 +3795,7 @@ const ChatViewInner = memo(function ChatViewInner({
       )}
 
       {/* Stacked cards container - queue + status */}
-      {!(pendingQuestions?.subChatId === subChatId) &&
+      {!pendingQuestions &&
         (queue.length > 0 || changedFilesForSubChat.length > 0) && (
           <div className="px-2 -mb-6 relative z-10">
             <div className="w-full max-w-2xl mx-auto px-2">
@@ -3810,7 +3869,7 @@ const ChatViewInner = memo(function ChatViewInner({
         <ScrollToBottomButton
           containerRef={chatContainerRef}
           onScrollToBottom={scrollToBottom}
-          hasStackedCards={!(pendingQuestions?.subChatId === subChatId) && (queue.length > 0 || changedFilesForSubChat.length > 0)}
+          hasStackedCards={!pendingQuestions && (queue.length > 0 || changedFilesForSubChat.length > 0)}
           subChatId={subChatId}
           isActive={isActive}
         />

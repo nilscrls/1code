@@ -191,18 +191,25 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
               // Handle AskUserQuestion - show question UI
               if (chunk.type === "ask-user-question") {
-                appStore.set(pendingUserQuestionsAtom, {
+                const currentMap = appStore.get(pendingUserQuestionsAtom)
+                const newMap = new Map(currentMap)
+                newMap.set(this.config.subChatId, {
                   subChatId: this.config.subChatId,
+                  parentChatId: this.config.chatId,
                   toolUseId: chunk.toolUseId,
                   questions: chunk.questions,
                 })
+                appStore.set(pendingUserQuestionsAtom, newMap)
               }
 
               // Handle AskUserQuestion timeout - clear pending question immediately
               if (chunk.type === "ask-user-question-timeout") {
-                const pending = appStore.get(pendingUserQuestionsAtom)
+                const currentMap = appStore.get(pendingUserQuestionsAtom)
+                const pending = currentMap.get(this.config.subChatId)
                 if (pending && pending.toolUseId === chunk.toolUseId) {
-                  appStore.set(pendingUserQuestionsAtom, null)
+                  const newMap = new Map(currentMap)
+                  newMap.delete(this.config.subChatId)
+                  appStore.set(pendingUserQuestionsAtom, newMap)
                 }
               }
 
@@ -258,9 +265,11 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 chunk.type !== "start-step"
 
               if (shouldClearOnChunk) {
-                const pending = appStore.get(pendingUserQuestionsAtom)
-                if (pending && pending.subChatId === this.config.subChatId) {
-                  appStore.set(pendingUserQuestionsAtom, null)
+                const currentMap = appStore.get(pendingUserQuestionsAtom)
+                if (currentMap.has(this.config.subChatId)) {
+                  const newMap = new Map(currentMap)
+                  newMap.delete(this.config.subChatId)
+                  appStore.set(pendingUserQuestionsAtom, newMap)
                 }
               }
 

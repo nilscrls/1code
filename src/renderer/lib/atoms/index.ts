@@ -175,6 +175,7 @@ export type SettingsTab =
   | "worktrees"
   | "debug"
   | "beta"
+  | "keyboard"
   | `project-${string}` // Dynamic project tabs
 export const agentsSettingsDialogActiveTabAtom = atom<SettingsTab>("profile")
 export const agentsSettingsDialogOpenAtom = atom<boolean>(false)
@@ -478,8 +479,29 @@ export const allFullThemesAtom = atom<VSCodeFullTheme[]>((get) => {
   return []
 })
 
-// Shortcuts dialog
-export const agentsShortcutsDialogOpenAtom = atom<boolean>(false)
+// ============================================
+// CUSTOM HOTKEYS CONFIGURATION
+// ============================================
+
+import type { CustomHotkeysConfig } from "../hotkeys/types"
+export type { CustomHotkeysConfig }
+
+/**
+ * Custom hotkey overrides storage
+ * Maps action IDs to custom hotkey strings (or null for default)
+ */
+export const customHotkeysAtom = atomWithStorage<CustomHotkeysConfig>(
+  "preferences:custom-hotkeys",
+  { version: 1, bindings: {} },
+  undefined,
+  { getOnInit: true },
+)
+
+/**
+ * Currently recording hotkey for action (UI state)
+ * null when not recording
+ */
+export const recordingHotkeyForActionAtom = atom<string | null>(null)
 
 // Login modal (shown when Claude Code auth fails)
 export const agentsLoginModalOpenAtom = atom<boolean>(false)

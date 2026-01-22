@@ -738,17 +738,6 @@ export const AgentsMentionsEditor = memo(
                 cursorRect.height
               )
 
-              console.log('[MentionEditor] USING CURSOR POSITION:', {
-                cursor: {
-                  top: cursorRect.top,
-                  left: cursorRect.left,
-                },
-                final: {
-                  top: rect.top,
-                  left: rect.left
-                },
-                searchText: afterAt
-              })
               onTrigger({ searchText: afterAt, rect })
               return
             }

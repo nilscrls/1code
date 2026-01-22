@@ -1167,28 +1167,50 @@ export const chatsRouter = router({
   /**
    * Get file change stats for workspaces
    * Parses messages from specified sub-chats and aggregates Edit/Write tool calls
-   * REQUIRES openSubChatIds to avoid loading all sub-chats (performance optimization)
+   * Supports two modes:
+   * - openSubChatIds: query specific sub-chats (used by main sidebar)
+   * - chatIds: query all sub-chats for given chats (used by archive popover)
    */
   getFileStats: publicProcedure
-    .input(z.object({ openSubChatIds: z.array(z.string()) }))
+    .input(z.object({
+      openSubChatIds: z.array(z.string()).optional(),
+      chatIds: z.array(z.string()).optional(),
+    }))
     .query(({ input }) => {
     const db = getDatabase()
 
-    // Early return if no sub-chats to check
-    if (input.openSubChatIds.length === 0) {
+    // Early return if nothing to check
+    if ((!input.openSubChatIds || input.openSubChatIds.length === 0) &&
+        (!input.chatIds || input.chatIds.length === 0)) {
       return []
     }
 
-    // Query only the specified sub-chats (VS Code style: load only what's needed)
-    const allChats = db
-      .select({
-        chatId: subChats.chatId,
-        subChatId: subChats.id,
-        messages: subChats.messages,
-      })
-      .from(subChats)
-      .where(inArray(subChats.id, input.openSubChatIds))
-      .all()
+    // Query sub-chats based on input mode
+    let allChats: Array<{ chatId: string | null; subChatId: string; messages: string | null }>
+
+    if (input.chatIds && input.chatIds.length > 0) {
+      // Archive mode: query all sub-chats for given chat IDs
+      allChats = db
+        .select({
+          chatId: subChats.chatId,
+          subChatId: subChats.id,
+          messages: subChats.messages,
+        })
+        .from(subChats)
+        .where(inArray(subChats.chatId, input.chatIds))
+        .all()
+    } else {
+      // Main sidebar mode: query specific sub-chats
+      allChats = db
+        .select({
+          chatId: subChats.chatId,
+          subChatId: subChats.id,
+          messages: subChats.messages,
+        })
+        .from(subChats)
+        .where(inArray(subChats.id, input.openSubChatIds!))
+        .all()
+    }
 
     // Aggregate stats per workspace (chatId)
     const statsMap = new Map<
@@ -1198,6 +1220,7 @@ export const chatsRouter = router({
 
     for (const row of allChats) {
       if (!row.messages || !row.chatId) continue
+      const chatId = row.chatId // TypeScript narrowing
 
       try {
         const messages = JSON.parse(row.messages) as Array<{
@@ -1274,7 +1297,7 @@ export const chatsRouter = router({
         }
 
         // Add to workspace total
-        const existing = statsMap.get(row.chatId) || {
+        const existing = statsMap.get(chatId) || {
           additions: 0,
           deletions: 0,
           fileCount: 0,
@@ -1282,7 +1305,7 @@ export const chatsRouter = router({
         existing.additions += subChatAdditions
         existing.deletions += subChatDeletions
         existing.fileCount += subChatFileCount
-        statsMap.set(row.chatId, existing)
+        statsMap.set(chatId, existing)
       } catch {
         // Skip invalid JSON
       }
@@ -1339,31 +1362,33 @@ export const chatsRouter = router({
 
         // Traverse messages from end to find unapproved ExitPlanMode
         // Logic matches active-chat.tsx hasUnapprovedPlan
-        let hasUnapprovedPlan = false
+        const checkHasUnapprovedPlan = (): boolean => {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i]
+            if (!msg) continue
 
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const msg = messages[i]
-          if (!msg) continue
+            // If user message says "Build plan" or "Implement plan" (exact match), plan is already approved
+            if (msg.role === "user") {
+              const textPart = msg.parts?.find((p) => p.type === "text")
+              const text = textPart?.text || ""
+              const normalizedText = text.trim().toLowerCase()
+              if (normalizedText === "implement plan" || normalizedText === "build plan") {
+                return false // Plan was approved
+              }
+            }
 
-          // If user message says "Build plan" or "Implement plan" (exact match), plan is already approved
-          if (msg.role === "user") {
-            const textPart = msg.parts?.find((p) => p.type === "text")
-            const text = textPart?.text || ""
-            const normalizedText = text.trim().toLowerCase()
-            if (normalizedText === "implement plan" || normalizedText === "build plan") {
-              break // Plan was approved, stop searching
+            // If assistant message with ExitPlanMode that has output.plan, we found an unapproved plan
+            if (msg.role === "assistant" && msg.parts) {
+              const exitPlanPart = msg.parts.find((p) => p.type === "tool-ExitPlanMode") as { output?: { plan?: string } } | undefined
+              if (exitPlanPart?.output?.plan) {
+                return true
+              }
             }
           }
-
-          // If assistant message with ExitPlanMode, we found an unapproved plan
-          if (msg.role === "assistant" && msg.parts) {
-            const exitPlanPart = msg.parts.find((p) => p.type === "tool-ExitPlanMode")
-            if (exitPlanPart) {
-              hasUnapprovedPlan = true
-              break
-            }
-          }
+          return false
         }
+
+        const hasUnapprovedPlan = checkHasUnapprovedPlan()
 
         if (hasUnapprovedPlan) {
           pendingApprovals.push({

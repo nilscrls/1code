@@ -11,10 +11,11 @@ import {
   SlidersFilledIcon,
   SettingsIcon,
 } from "../../icons"
-import { SkillIconFilled, CustomAgentIconFilled, OriginalMCPIcon, BrainFilledIcon, FlaskFilledIcon, BugFilledIcon } from "../ui/icons"
+import { SkillIconFilled, CustomAgentIconFilled, OriginalMCPIcon, BrainFilledIcon, FlaskFilledIcon, BugFilledIcon, KeyboardFilledIcon } from "../ui/icons"
 import { AgentsAppearanceTab } from "./settings-tabs/agents-appearance-tab"
 import { AgentsProfileTab } from "./settings-tabs/agents-profile-tab"
 import { AgentsPreferencesTab } from "./settings-tabs/agents-preferences-tab"
+import { AgentsKeyboardTab } from "./settings-tabs/agents-keyboard-tab"
 import { AgentsDebugTab } from "./settings-tabs/agents-debug-tab"
 import { AgentsSkillsTab } from "./settings-tabs/agents-skills-tab"
 import { AgentsCustomAgentsTab } from "./settings-tabs/agents-custom-agents-tab"
@@ -62,6 +63,12 @@ const MAIN_TABS = [
     label: "Appearance",
     icon: EyeOpenFilledIcon,
     description: "Theme settings",
+  },
+  {
+    id: "keyboard" as SettingsTab,
+    label: "Keyboard",
+    icon: KeyboardFilledIcon,
+    description: "Customize keyboard shortcuts",
   },
   {
     id: "preferences" as SettingsTab,
@@ -282,6 +289,8 @@ export function AgentsSettingsDialog({
         return <AgentsProfileTab />
       case "appearance":
         return <AgentsAppearanceTab />
+      case "keyboard":
+        return <AgentsKeyboardTab />
       case "preferences":
         return <AgentsPreferencesTab />
       case "models":
@@ -507,7 +516,7 @@ export function AgentsSettingsDialog({
                 </div>
 
                 {/* Right Content Area */}
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 min-w-0">
                   <div className="flex flex-col relative h-full bg-tl-background rounded-xl w-full transition-all duration-300 overflow-y-auto">
                     {renderTabContent()}
                   </div>
