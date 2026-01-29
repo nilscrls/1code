@@ -4645,9 +4645,6 @@ export function ChatView({
   const [isCreatingPr, setIsCreatingPr] = useAtom(isCreatingPrAtom)
   // Review loading state
   const [isReviewing, setIsReviewing] = useState(false)
-  // Subchat filter setter - used by handleReview to filter by active subchat
-  const setFilteredSubChatId = useSetAtom(filteredSubChatIdAtom)
-
   // Determine if we're in sandbox mode
   const chatSourceMode = useAtomValue(chatSourceModeAtom)
 
@@ -5300,11 +5297,6 @@ export function ChatView({
         return
       }
 
-      // Set filter to show only files from the active subchat
-      if (activeSubChatId) {
-        setFilteredSubChatId(activeSubChatId)
-      }
-
       // Generate review message and set it for ChatViewInner to send
       const message = generateReviewMessage(context)
       setPendingReviewMessage(message)
@@ -5316,7 +5308,7 @@ export function ChatView({
     } finally {
       setIsReviewing(false)
     }
-  }, [chatId, activeSubChatId, setPendingReviewMessage, setFilteredSubChatId])
+  }, [chatId, setPendingReviewMessage])
 
   // Handle Fix Conflicts - sends a message to Claude to sync with main and fix merge conflicts
   const setPendingConflictResolutionMessage = useSetAtom(pendingConflictResolutionMessageAtom)
