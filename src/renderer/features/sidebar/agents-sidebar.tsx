@@ -141,6 +141,10 @@ import { exportChat, copyChat, type ExportFormat } from "../agents/lib/export-ch
 const FEEDBACK_URL =
   import.meta.env.VITE_FEEDBACK_URL || "https://discord.gg/8ektTZGnj4"
 
+// Support URL: uses env variable for hosted version, falls back to email
+const SUPPORT_URL =
+  import.meta.env.VITE_SUPPORT_URL || "mailto:support@21st.dev"
+
 // GitHub avatar with loading placeholder
 const GitHubAvatar = React.memo(function GitHubAvatar({
   gitOwner,
@@ -1636,6 +1640,24 @@ const HelpSection = memo(function HelpSection({ isMobile }: HelpSectionProps) {
         </div>
       </TooltipTrigger>
       <TooltipContent>Help</TooltipContent>
+    </Tooltip>
+  )
+})
+
+// Support Button - isolated component to prevent sidebar re-renders
+const SupportButton = memo(function SupportButton() {
+  return (
+    <Tooltip delayDuration={500}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => window.open(SUPPORT_URL, "_blank")}
+          className="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.97] outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
+        >
+          <TicketIcon className="h-4 w-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>Support</TooltipContent>
     </Tooltip>
   )
 })
@@ -3417,6 +3439,9 @@ export function AgentsSidebar({
 
                 {/* Help Button - isolated component to prevent sidebar re-renders */}
                 <HelpSection isMobile={isMobileFullscreen} />
+
+                {/* Support Button - isolated component */}
+                <SupportButton />
 
                 {/* Kanban View Button - isolated component */}
                 <KanbanButton />
