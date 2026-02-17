@@ -124,7 +124,7 @@ export function ClaudeLoginModal() {
   // Helper to trigger retry after successful OAuth
   const triggerAuthRetry = () => {
     const pending = appStore.get(pendingAuthRetryMessageAtom)
-    if (pending) {
+    if (pending && pending.provider === "claude-code") {
       console.log("[ClaudeLoginModal] OAuth success - triggering retry for subChatId:", pending.subChatId)
       appStore.set(pendingAuthRetryMessageAtom, { ...pending, readyToRetry: true })
     }
@@ -133,7 +133,11 @@ export function ClaudeLoginModal() {
   // Helper to clear pending retry (on cancel/close without success)
   const clearPendingRetry = () => {
     const pending = appStore.get(pendingAuthRetryMessageAtom)
-    if (pending && !pending.readyToRetry) {
+    if (
+      pending &&
+      pending.provider === "claude-code" &&
+      !pending.readyToRetry
+    ) {
       console.log("[ClaudeLoginModal] Modal closed without success - clearing pending retry")
       appStore.set(pendingAuthRetryMessageAtom, null)
     }

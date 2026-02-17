@@ -1,9 +1,15 @@
 "use client"
 
 import { useAtomValue } from "jotai"
-import { ListTree } from "lucide-react"
+import { ListTree, MoreHorizontal } from "lucide-react"
 import { memo, useCallback, useContext, useMemo, useState } from "react"
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu"
 import { CollapseIcon, ExpandIcon, PlanIcon } from "../../../components/ui/icons"
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { cn } from "../../../lib/utils"
@@ -24,8 +30,9 @@ import { AgentPlanTool } from "../ui/agent-plan-tool"
 import { AgentTaskTool } from "../ui/agent-task-tool"
 import { AgentThinkingTool } from "../ui/agent-thinking-tool"
 import { AgentTodoTool } from "../ui/agent-todo-tool"
+import { AgentMcpToolCall } from "../ui/agent-mcp-tool-call"
 import { AgentToolCall } from "../ui/agent-tool-call"
-import { AgentToolRegistry, getToolStatus } from "../ui/agent-tool-registry"
+import { AgentToolRegistry, getToolStatus, parseMcpToolType } from "../ui/agent-tool-registry"
 import { AgentWebFetchTool } from "../ui/agent-web-fetch-tool"
 import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
 import {
@@ -35,6 +42,7 @@ import {
 } from "../ui/message-action-buttons"
 import { useFileOpen } from "../mentions"
 import { GitActivityBadges } from "../ui/git-activity-badges"
+import { ForkContext } from "./isolated-message-group"
 import { MemoizedTextPart } from "./memoized-text-part"
 
 // Exploring tools - these get grouped when 3+ consecutive
@@ -53,6 +61,60 @@ const TASK_TOOLS = new Set([
   "tool-TaskGet",
   "tool-TaskList",
 ])
+
+const STREAMING_REASONING_STATES = new Set(["streaming", "in_progress", "input-streaming"])
+const DONE_REASONING_STATES = new Set(["done", "completed", "result", "output-available"])
+const ERROR_REASONING_STATES = new Set(["error", "output-error"])
+
+function mapReasoningStateToThinkingState(state: unknown): string {
+  if (typeof state !== "string") {
+    return "output-available"
+  }
+
+  const normalized = state.trim().toLowerCase()
+  if (STREAMING_REASONING_STATES.has(normalized)) return "input-streaming"
+  if (DONE_REASONING_STATES.has(normalized)) return "output-available"
+  if (ERROR_REASONING_STATES.has(normalized)) return "output-error"
+  return "output-available"
+}
+
+function getThinkingText(part: any): string {
+  if (typeof part?.input?.text === "string") return part.input.text
+  if (typeof part?.text === "string") return part.text
+  return ""
+}
+
+function toThinkingToolPart(part: any, messageId: string | undefined, index: number): any {
+  const normalizedState = mapReasoningStateToThinkingState(part.state)
+  const text = getThinkingText(part)
+  const normalizedPart = {
+    ...part,
+    type: "tool-Thinking",
+    toolCallId:
+      typeof part.toolCallId === "string" && part.toolCallId.length > 0
+        ? part.toolCallId
+        : typeof part.id === "string" && part.id.length > 0
+          ? part.id
+          : `reasoning-${messageId || "message"}-${index}`,
+    toolName: typeof part.toolName === "string" ? part.toolName : "Thinking",
+    input: {
+      ...(part.input && typeof part.input === "object" ? part.input : {}),
+      text,
+    },
+    state: normalizedState,
+  }
+
+  if (normalizedState !== "output-available") {
+    return normalizedPart
+  }
+
+  const completedResult = { completed: true }
+  return {
+    ...normalizedPart,
+    result: normalizedPart.result ?? completedResult,
+    output: normalizedPart.output ?? completedResult,
+  }
+}
 
 
 // Group consecutive exploring tools into exploring-group
@@ -187,6 +249,24 @@ interface MessageStateSnapshot {
 }
 const messageStateCache = new Map<string, MessageStateSnapshot>()
 
+function getTrackedPartTextLength(part: any): number {
+  if (part?.type === "text") {
+    return typeof part.text === "string" ? part.text.length : 0
+  }
+
+  if (part?.type === "reasoning") {
+    return typeof part.text === "string" ? part.text.length : 0
+  }
+
+  if (part?.type === "tool-Thinking") {
+    if (typeof part?.input?.text === "string") return part.input.text.length
+    if (typeof part?.text === "string") return part.text.length
+    return 0
+  }
+
+  return -1
+}
+
 // Custom comparison - check if message content actually changed
 // CRITICAL: AI SDK mutates objects in-place! So prev.message.parts[i].text === next.message.parts[i].text
 // even when text HAS changed (they're the same mutated object).
@@ -216,9 +296,7 @@ function areMessagePropsEqual(
   const lastPart = nextParts[nextParts.length - 1]
 
   const currentState: MessageStateSnapshot = {
-    textLengths: nextParts.map((p: any) =>
-      p.type === "text" ? (p.text?.length || 0) : -1
-    ),
+    textLengths: nextParts.map((p: any) => getTrackedPartTextLength(p)),
     // Track ALL part states - critical for detecting Edit plan file streaming!
     partStates: nextParts.map((p: any) => p.state),
     // Track tool input changes - this is critical for tool streaming!
@@ -280,6 +358,7 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
   const selectedProject = useAtomValue(selectedProjectAtom)
   const projectPath = selectedProject?.path
   const onOpenFile = useFileOpen()
+  const onFork = useContext(ForkContext)
   const isDev = import.meta.env.DEV
   const messageParts = message?.parts || []
 
@@ -485,7 +564,15 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     }
 
     if (part.type === "tool-Bash") return <AgentBashTool key={idx} part={part} messageId={message.id} partIndex={idx} chatStatus={status} />
-    if (part.type === "tool-Thinking") return <AgentThinkingTool key={idx} part={part} chatStatus={status} />
+    if (part.type === "reasoning" || part.type === "tool-Thinking") {
+      return (
+        <AgentThinkingTool
+          key={idx}
+          part={toThinkingToolPart(part, message?.id, idx)}
+          chatStatus={status}
+        />
+      )
+    }
 
     // Plan files: unified handling
     // - In collapsed steps: all show mini indicator, last collapsed op's card shown separately after finalParts
@@ -593,6 +680,19 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
           isPending={isPending}
           isError={isError}
           onClick={handleClick}
+        />
+      )
+    }
+
+    // MCP tool calls (pattern: tool-mcp__<server>__<tool>)
+    const mcpInfo = parseMcpToolType(part.type)
+    if (mcpInfo) {
+      return (
+        <AgentMcpToolCall
+          key={idx}
+          part={part}
+          mcpInfo={mcpInfo}
+          chatStatus={status}
         />
       )
     }
@@ -721,7 +821,26 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
               isMobile={isMobile}
             />
           </div>
-          <AgentMessageUsage metadata={msgMetadata} isStreaming={isStreaming} isMobile={isMobile} />
+          <div className="flex items-center gap-0.5">
+            <AgentMessageUsage metadata={msgMetadata} isStreaming={isStreaming} isMobile={isMobile} />
+            {onFork && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    tabIndex={-1}
+                    className="p-1 rounded-md transition-[background-color,transform] duration-150 ease-out hover:bg-accent active:scale-[0.97]"
+                  >
+                    <MoreHorizontal className="w-3.5 h-3.5 text-muted-foreground" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[160px]">
+                  <DropdownMenuItem onClick={() => onFork(message.id)}>
+                    Fork from here
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </div>
       )}
 
